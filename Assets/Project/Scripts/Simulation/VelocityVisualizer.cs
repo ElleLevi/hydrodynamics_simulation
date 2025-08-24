@@ -1,5 +1,6 @@
 using UnityEngine;
 using Obi;
+using System.Collections.Generic;
 
 public class VelocityVisualizer : MonoBehaviour
 {
@@ -7,17 +8,8 @@ public class VelocityVisualizer : MonoBehaviour
     public GameObject arrowPrefab;
     public float scaleFactor = 0.1f;
 
-    private GameObject[] arrows;
-
-    void Start()
-    {
-        arrows = new GameObject[emitter.particleCount];
-
-        for (int i = 0; i < emitter.particleCount; i++)
-        {
-            arrows[i] = Instantiate(arrowPrefab, Vector3.zero, Quaternion.identity, transform);
-        }
-    }
+    // Diccionario: indice de particula -> flecha asociada
+    private Dictionary<int, GameObject> arrowMap = new Dictionary<int, GameObject>();
 
     void LateUpdate()
     {
@@ -25,20 +17,37 @@ public class VelocityVisualizer : MonoBehaviour
 
         for (int i = 0; i < emitter.particleCount; i++)
         {
-            int solverIndex = emitter.solverIndices[i]; // nuevo API
+            int solverIndex = emitter.solverIndices[i];
 
-            // Si la partícula es válida:
+            // Particula activa
             if (solverIndex >= 0)
             {
                 Vector3 pos = solver.positions[solverIndex];
                 Vector3 vel = solver.velocities[solverIndex];
 
-                arrows[i].transform.position = pos;
+                // Si no existe flecha para esta particula -> crearla
+                if (!arrowMap.ContainsKey(i))
+                {
+                    GameObject arrow = Instantiate(arrowPrefab, Vector3.zero, Quaternion.identity, transform);
+                    arrowMap[i] = arrow;
+                }
+
+                GameObject currentArrow = arrowMap[i];
+                currentArrow.transform.position = pos;
 
                 if (vel != Vector3.zero)
-                    arrows[i].transform.rotation = Quaternion.LookRotation(vel.normalized);
+                    currentArrow.transform.rotation = Quaternion.LookRotation(vel.normalized);
 
-                arrows[i].transform.localScale = Vector3.one * Mathf.Clamp(vel.magnitude * scaleFactor, 0.05f, 0.3f);
+                currentArrow.transform.localScale = Vector3.one * Mathf.Clamp(vel.magnitude * scaleFactor, 0.05f, 0.3f);
+            }
+            else
+            {
+                // Particula desaparecida -> destruir flecha si existia
+                if (arrowMap.ContainsKey(i))
+                {
+                    Destroy(arrowMap[i]);
+                    arrowMap.Remove(i);
+                }
             }
         }
     }
