@@ -4,6 +4,8 @@ using UnityEngine;
 
 public class FlowLinesVisualizer : MonoBehaviour
 {
+    public enum ColorMode { Density, Velocity }
+
     [Header("Emisor y Material")]
     public ObiEmitter emitter;
     public Material lineMaterial;
@@ -13,17 +15,24 @@ public class FlowLinesVisualizer : MonoBehaviour
     public int maxPoints = 100;
     public float width = 0.01f;
 
-    [Header("Color por 'presión' (densidad proxy)")]
+    [Header("Coloreo")]
+    public ColorMode colorMode = ColorMode.Density;
+
+    [Tooltip("Colores por densidad (proxy de presión)")]
     public Gradient densityColorRamp;
     public bool autoFitDensityRange = true;
     public float minDensity = 900f;
     public float maxDensity = 1100f;
 
+    [Tooltip("Colores por velocidad")]
+    public Gradient velocityColorRamp;
+    public float maxSpeed = 5f;
+
     private struct LineData
     {
         public LineRenderer lr;
         public Queue<Vector3> positions;
-        public Queue<float> densities;
+        public Queue<float> values; // densidad o velocidad segun modo
     }
 
     private readonly Dictionary<int, LineData> lines = new Dictionary<int, LineData>();
@@ -40,6 +49,19 @@ public class FlowLinesVisualizer : MonoBehaviour
                     new GradientColorKey(Color.blue, 0f),
                     new GradientColorKey(Color.cyan, 0.33f),
                     new GradientColorKey(Color.yellow, 0.66f),
+                    new GradientColorKey(Color.red, 1f)
+                },
+                new[] { new GradientAlphaKey(1f, 0f), new GradientAlphaKey(1f, 1f) }
+            );
+        }
+
+        if (velocityColorRamp == null || velocityColorRamp.colorKeys.Length == 0)
+        {
+            velocityColorRamp = new Gradient();
+            velocityColorRamp.SetKeys(
+                new[] {
+                    new GradientColorKey(Color.green, 0f),
+                    new GradientColorKey(Color.yellow, 0.5f),
                     new GradientColorKey(Color.red, 1f)
                 },
                 new[] { new GradientAlphaKey(1f, 0f), new GradientAlphaKey(1f, 1f) }
@@ -82,7 +104,7 @@ public class FlowLinesVisualizer : MonoBehaviour
                 {
                     lr = CreateLineRenderer(i),
                     positions = new Queue<Vector3>(maxPoints + 1),
-                    densities = new Queue<float>(maxPoints + 1)
+                    values = new Queue<float>(maxPoints + 1)
                 };
             }
 
@@ -90,47 +112,72 @@ public class FlowLinesVisualizer : MonoBehaviour
                           ? solver.renderablePositions[solverIndex]
                           : solver.positions[solverIndex];
 
-            float density = solver.fluidData[solverIndex].x;
-
-            if (autoFitDensityRange)
+            float value = 0f;
+            switch (colorMode)
             {
-                if (density < observedMin) observedMin = density;
-                if (density > observedMax) observedMax = density;
+                case ColorMode.Density:
+                    float density = solver.fluidData[solverIndex].x;
+                    if (autoFitDensityRange)
+                    {
+                        if (density < observedMin) observedMin = density;
+                        if (density > observedMax) observedMax = density;
+                    }
+                    value = density;
+                    break;
+
+                case ColorMode.Velocity:
+                    Vector3 vel = solver.velocities[solverIndex];
+                    value = vel.magnitude;
+                    break;
             }
 
             ld.positions.Enqueue(pos);
-            ld.densities.Enqueue(density);
+            ld.values.Enqueue(value);
 
             while (ld.positions.Count > maxPoints)
             {
                 ld.positions.Dequeue();
-                ld.densities.Dequeue();
+                ld.values.Dequeue();
             }
 
             var posArray = ld.positions.ToArray();
+            var valArray = ld.values.ToArray();
+            int n = valArray.Length;
+
             ld.lr.positionCount = posArray.Length;
             ld.lr.SetPositions(posArray);
 
-            // Gradiente optimizado para máximo 8 keys
-            var densArray = ld.densities.ToArray();
-            int n = densArray.Length;
             if (n > 0)
             {
-                int keyCount = Mathf.Min(n, 8); // máximo 8 keys
+                int keyCount = Mathf.Min(8, n); // máximo 8 keys
                 var cks = new GradientColorKey[keyCount];
                 var aks = new GradientAlphaKey[keyCount];
 
                 for (int k = 0; k < keyCount; ++k)
                 {
-                    int index = (keyCount == 1) ? 0 : Mathf.RoundToInt((float)k / (keyCount - 1) * (n - 1));
-                    float tLine = (keyCount == 1) ? 0f : (float)k / (keyCount - 1);
-                    float tDensity = Mathf.InverseLerp(autoFitDensityRange ? observedMin : minDensity,
-                                                       autoFitDensityRange ? observedMax : maxDensity,
-                                                       densArray[index]);
-                    Color c = densityColorRamp.Evaluate(tDensity);
+                    int index;
+                    if (keyCount == 1 || n == 1)
+                        index = 0;
+                    else
+                        index = Mathf.Clamp(Mathf.RoundToInt((float)k / (keyCount - 1) * (n - 1)), 0, n - 1);
 
-                    cks[k] = new GradientColorKey(c, tLine);
-                    aks[k] = new GradientAlphaKey(c.a, tLine);
+                    float tLine = (keyCount == 1) ? 0f : (float)k / (keyCount - 1);
+
+                    float tValue = 0f;
+                    if (colorMode == ColorMode.Density)
+                    {
+                        tValue = Mathf.InverseLerp(autoFitDensityRange ? observedMin : minDensity,
+                                                   autoFitDensityRange ? observedMax : maxDensity,
+                                                   valArray[index]);
+                        cks[k] = new GradientColorKey(densityColorRamp.Evaluate(tValue), tLine);
+                        aks[k] = new GradientAlphaKey(1f, tLine);
+                    }
+                    else
+                    {
+                        tValue = Mathf.Clamp01(valArray[index] / maxSpeed);
+                        cks[k] = new GradientColorKey(velocityColorRamp.Evaluate(tValue), tLine);
+                        aks[k] = new GradientAlphaKey(1f, tLine);
+                    }
                 }
 
                 var g = new Gradient();
@@ -165,7 +212,7 @@ public class FlowLinesVisualizer : MonoBehaviour
         go.transform.SetParent(transform, false);
 
         var lr = go.AddComponent<LineRenderer>();
-        lr.material = lineMaterial;
+        lr.material = lineMaterial; // sprite/default soporta gradiente
         lr.widthMultiplier = width;
         lr.positionCount = 0;
         lr.useWorldSpace = true;
